@@ -229,6 +229,37 @@ const REGION_COLORS = {
   "根室": "#10ac84",
 };
 
+const EASY_NAMES = new Set([
+  "札幌市", "函館市", "旭川市", "帯広市", "釧路市", "北見市", "網走市",
+  "室蘭市", "苫小牧市", "小樽市", "稚内市", "根室市", "登別市", "夕張市",
+  "富良野市", "ニセコ町", "洞爺湖町", "白老町", "千歳市", "恵庭市",
+  "北広島市", "石狩市", "江別市", "名寄市", "士別市", "倶知安町", "紋別市",
+  "伊達市", "七飯町", "美瑛町", "長沼町", "栗山町", "余市町",
+]);
+
+const HARD_NAMES = new Set([
+  "音威子府村", "占冠村", "妹背牛町", "秩父別町", "比布町", "訓子府町",
+  "弟子屈町", "長万部町", "知内町", "猿払村", "幌延町", "標茶町",
+  "厚岸町", "標津町", "羅臼町", "白糠町", "様似町", "剣淵町",
+  "和寒町", "奥尻町", "神恵内村", "積丹町", "幌加内町", "島牧村",
+  "初山別村", "遠別町", "浜頓別町", "中頓別町", "美深町", "置戸町",
+  "佐呂間町", "雄武町", "新篠津村", "浦臼町", "新十津川町", "上砂川町",
+]);
+
+function getDifficulty(name) {
+  if (EASY_NAMES.has(name)) return "easy";
+  if (HARD_NAMES.has(name)) return "hard";
+  return "normal";
+}
+
+function getRegionLabel(gameMode) {
+  if (gameMode === "all") return "全179市町村";
+  if (gameMode === "easy10") return "ランダム10問（易しい）";
+  if (gameMode === "normal10") return "ランダム10問（普通）";
+  if (gameMode === "hard10") return "ランダム10問（難しい）";
+  return `${gameMode}振興局`;
+}
+
 /* ---------- 地図用投影 ---------- */
 const MAP_W = 360;
 const MAP_H = 320;
@@ -278,6 +309,26 @@ function formatPopulation(pop) {
   return `${n}人`;
 }
 
+function splitSuffix(name, reading) {
+  const suffixes = [
+    { kanji: "市", reading: "し" },
+    { kanji: "町", reading: "ちょう" },
+    { kanji: "町", reading: "まち" },
+    { kanji: "村", reading: "むら" },
+  ];
+  for (const sfx of suffixes) {
+    if (name.endsWith(sfx.kanji) && reading.endsWith(sfx.reading)) {
+      return {
+        baseName: name.slice(0, -sfx.kanji.length),
+        baseReading: reading.slice(0, -sfx.reading.length),
+        suffix: sfx.kanji,
+        suffixReading: sfx.reading,
+      };
+    }
+  }
+  return { baseName: name, baseReading: reading, suffix: "", suffixReading: "" };
+}
+
 function shuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -290,7 +341,7 @@ function shuffle(arr) {
 /* ---------- メインコンポーネント ---------- */
 export default function HokkaidoTypingGame() {
   const [screen, setScreen] = useState("menu"); // "menu" | "playing"
-  const [selectedRegion, setSelectedRegion] = useState("all");
+  const [gameMode, setGameMode] = useState("all"); // "all"|"easy10"|"normal10"|"hard10"|region名
   const [phase, setPhase] = useState("question"); // "question" | "answer"
   const [queue, setQueue] = useState([]);
   const [current, setCurrent] = useState(null);
@@ -312,15 +363,27 @@ export default function HokkaidoTypingGame() {
   }, []);
 
   const pool = useMemo(() => {
-    return selectedRegion === "all" ? DATA : DATA.filter((d) => d.region === selectedRegion);
-  }, [selectedRegion]);
+    if (["easy10", "normal10", "hard10"].includes(gameMode)) return DATA;
+    if (gameMode === "all") return DATA;
+    return DATA.filter((d) => d.region === gameMode);
+  }, [gameMode]);
 
-  function startGame(region) {
-    const p = region === "all" ? DATA : DATA.filter((d) => d.region === region);
-    const sh = shuffle(p);
-    setSelectedRegion(region);
-    setQueue(sh.slice(1));
-    setCurrent(sh[0]);
+  function startGame(mode) {
+    let candidates;
+    if (mode === "easy10") {
+      candidates = shuffle(DATA.filter((d) => getDifficulty(d.name) === "easy")).slice(0, 10);
+    } else if (mode === "normal10") {
+      candidates = shuffle(DATA.filter((d) => getDifficulty(d.name) === "normal")).slice(0, 10);
+    } else if (mode === "hard10") {
+      candidates = shuffle(DATA.filter((d) => getDifficulty(d.name) === "hard")).slice(0, 10);
+    } else if (mode === "all") {
+      candidates = shuffle(DATA);
+    } else {
+      candidates = shuffle(DATA.filter((d) => d.region === mode));
+    }
+    setGameMode(mode);
+    setQueue(candidates.slice(1));
+    setCurrent(candidates[0]);
     setPhase("question");
     setInput("");
     setStats({ correct: 0, wrong: 0, streak: 0, best: 0, total: 0 });
@@ -346,19 +409,13 @@ export default function HokkaidoTypingGame() {
   }, [phase, current]);
 
   function next() {
-    if (correctSet.size >= poolSize) {
+    if (queue.length === 0) {
       setScreen("complete");
       return;
     }
-    if (queue.length === 0) {
-      const sh = shuffle(pool);
-      setQueue(sh.slice(1));
-      setCurrent(sh[0]);
-    } else {
-      const [n, ...rest] = queue;
-      setCurrent(n);
-      setQueue(rest);
-    }
+    const [n, ...rest] = queue;
+    setCurrent(n);
+    setQueue(rest);
     setPhase("question");
     setInput("");
   }
@@ -379,7 +436,8 @@ export default function HokkaidoTypingGame() {
   function handleSubmit() {
     if (phase !== "question" || !current) return;
     if (input.length === 0) return;
-    const correct = input === current.reading;
+    const { baseReading } = splitSuffix(current.name, current.reading);
+    const correct = input === baseReading;
     if (correct) {
       setCorrectSet((prev) => new Set([...prev, current.name]));
       setStats((s) => {
@@ -408,24 +466,33 @@ export default function HokkaidoTypingGame() {
     setPhase("answer");
   }
 
+  const currentSplit = useMemo(
+    () => current ? splitSuffix(current.name, current.reading) : { baseName: "", baseReading: "", suffix: "", suffixReading: "" },
+    [current]
+  );
+
   const accuracy = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
-  const poolSize = selectedRegion === "all" ? DATA.length : DATA.filter((d) => d.region === selectedRegion).length;
+  const poolSize = (() => {
+    if (["easy10", "normal10", "hard10"].includes(gameMode)) return 10;
+    if (gameMode === "all") return DATA.length;
+    return DATA.filter((d) => d.region === gameMode).length;
+  })();
   const progressPct = poolSize > 0 ? Math.round((correctSet.size / poolSize) * 100) : 0;
 
   function handleShare() {
-    const regionLabel = selectedRegion === "all" ? "全179市町村" : `${selectedRegion}振興局`;
+    const label = getRegionLabel(gameMode);
     const isComplete = correctSet.size >= poolSize;
-    const header = isComplete ? `🎉 ${regionLabel} 制覇！` : `🗾 よめるべや？北海道`;
+    const header = isComplete ? `🎉 ${label} 制覇！` : `🗾 よめるべ！北海道！`;
     const text = [
       header,
       "",
-      `📍 ${regionLabel}`,
+      `📍 ${label}`,
       `✅ ${stats.correct} / ${poolSize} 完了（${progressPct}%）`,
       `🎯 正答率 ${accuracy}%`,
       `🔥 最大連続 ${stats.best}問正解`,
       "",
-      "北海道の市町村、よめるべや？",
-      "#北海道 #地名クイズ #よめるべや",
+      "北海道の市町村、よめるべ！",
+      "#北海道 #地名クイズ #よめるべ",
     ].join("\n");
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`,
@@ -468,19 +535,7 @@ export default function HokkaidoTypingGame() {
                 lineHeight: 1.2,
               }}
             >
-              よめるべや？
-            </div>
-            <div
-              style={{
-                fontFamily: fontHead,
-                fontWeight: 700,
-                fontSize: "clamp(1.4rem, 5vw, 2rem)",
-                color: "#3D2E26",
-                letterSpacing: "0.08em",
-                marginTop: "0.3rem",
-              }}
-            >
-              北海道 全179市町村
+              よめるべ！北海道！
             </div>
             <div
               className="mt-3 mx-auto"
@@ -495,14 +550,42 @@ export default function HokkaidoTypingGame() {
               className="mt-4 text-sm"
               style={{ color: "#8B7D6E", fontFamily: fontBody, letterSpacing: "0.1em" }}
             >
-              エリアを選んでゲームスタート
+              モードを選んでスタート
             </p>
+          </div>
+
+          {/* ランダム10問 — 独立ボタン */}
+          <div className="flex flex-col gap-4 mb-6">
+            {[
+              { mode: "easy10", label: "ランダム10問（易しい）", color: "#5BA982", grad: "linear-gradient(135deg, #5BA982 0%, #82C9A0 100%)" },
+              { mode: "normal10", label: "ランダム10問（普通）", color: "#E8A830", grad: "linear-gradient(135deg, #F4B53D 0%, #F4C95D 100%)" },
+              { mode: "hard10", label: "ランダム10問（難しい）", color: "#E76F51", grad: "linear-gradient(135deg, #E76F51 0%, #F4956A 100%)" },
+            ].map(({ mode, label, grad, color }) => (
+              <button
+                key={mode}
+                onClick={() => startGame(mode)}
+                className="w-full rounded-3xl py-5 transition-transform hover:scale-[1.02] active:scale-[0.98]"
+                style={{
+                  background: grad,
+                  color: "#fff",
+                  fontFamily: fontHead,
+                  fontWeight: 800,
+                  fontSize: "clamp(1.1rem, 3.5vw, 1.4rem)",
+                  letterSpacing: "0.08em",
+                  boxShadow: `0 8px 24px ${color}55`,
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                {label} →
+              </button>
+            ))}
           </div>
 
           {/* 全179ボタン */}
           <button
             onClick={() => startGame("all")}
-            className="w-full rounded-3xl py-6 mb-8 transition-transform hover:scale-[1.02] active:scale-[0.98]"
+            className="w-full rounded-3xl py-6 mb-5 transition-transform hover:scale-[1.02] active:scale-[0.98]"
             style={{
               background: "linear-gradient(135deg, #F08856 0%, #F4B53D 100%)",
               color: "#fff",
@@ -518,7 +601,7 @@ export default function HokkaidoTypingGame() {
             全179市町村に挑戦 →
           </button>
 
-          {/* 振興局グリッド */}
+          {/* エリア別グリッド */}
           <div
             className="rounded-3xl p-5"
             style={{
@@ -531,7 +614,7 @@ export default function HokkaidoTypingGame() {
               className="text-center text-xs mb-4"
               style={{ color: "#8B7D6E", letterSpacing: "0.2em", fontFamily: fontBody }}
             >
-              振興局・支庁別
+              エリア別
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {REGIONS.map((r) => {
@@ -581,12 +664,34 @@ export default function HokkaidoTypingGame() {
 
   /* ===== 全問クリア画面 ===== */
   if (screen === "complete") {
-    const regionLabel = selectedRegion === "all" ? "全179市町村" : `${selectedRegion}振興局`;
+    const regionLabel = getRegionLabel(gameMode);
     const hardList = Object.entries(wrongCounts)
       .map(([name, count]) => ({ item: DATA.find((d) => d.name === name), count }))
       .filter((x) => x.item)
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
+
+    const resultInfo = (() => {
+      if (stats.correct === 0) {
+        return {
+          emoji: "😓",
+          title: "む、難しかったべや...",
+          subtitle: `全 ${poolSize} 問チャレンジ！諦めずにもう一度挑戦してみよう`,
+        };
+      }
+      if (accuracy === 100) {
+        return {
+          emoji: "🎉",
+          title: `${regionLabel} 制覇！`,
+          subtitle: `全 ${poolSize} 市町村の読み方をマスターした！`,
+        };
+      }
+      return {
+        emoji: "😊",
+        title: `${accuracy}% 達成だべや！`,
+        subtitle: `全 ${poolSize} 問中 ${stats.correct} 問正解！もう一息だべや`,
+      };
+    })();
 
     function shareComplete() {
       const hard = hardList
@@ -594,10 +699,10 @@ export default function HokkaidoTypingGame() {
         .map(({ item, count }) => `${item.name}(${count}回)`)
         .join("・");
       const text = [
-        `🎉 よめるべや？北海道 ${regionLabel} 制覇！`,
+        `${resultInfo.emoji} よめるべ！北海道！ ${resultInfo.title}`,
         "",
-        `📍 ${regionLabel} 全 ${poolSize} 市町村クリア`,
-        `🎯 正答率 ${accuracy}%`,
+        `📍 ${regionLabel}`,
+        `🎯 正答率 ${accuracy}% (${stats.correct}/${poolSize}問)`,
         `🔥 最大連続 ${stats.best}問正解`,
         hard ? `😅 苦手: ${hard}` : "",
         "",
@@ -623,9 +728,9 @@ export default function HokkaidoTypingGame() {
           }}
         />
         <div className="relative max-w-2xl mx-auto px-4 py-10 sm:py-16">
-          {/* 祝福ヘッダー */}
+          {/* リザルトヘッダー */}
           <div className="text-center mb-8">
-            <div style={{ fontSize: "4rem", lineHeight: 1 }}>🎉</div>
+            <div style={{ fontSize: "4rem", lineHeight: 1 }}>{resultInfo.emoji}</div>
             <div
               style={{
                 fontFamily: fontHead,
@@ -636,7 +741,7 @@ export default function HokkaidoTypingGame() {
                 letterSpacing: "0.05em",
               }}
             >
-              {regionLabel} 制覇！
+              {resultInfo.title}
             </div>
             <div
               style={{
@@ -647,7 +752,7 @@ export default function HokkaidoTypingGame() {
                 letterSpacing: "0.1em",
               }}
             >
-              全 {poolSize} 市町村の読み方をマスターした！
+              {resultInfo.subtitle}
             </div>
           </div>
 
@@ -747,7 +852,7 @@ export default function HokkaidoTypingGame() {
               Xで結果をシェア
             </button>
             <button
-              onClick={() => startGame(selectedRegion)}
+              onClick={() => startGame(gameMode)}
               className="w-full py-4 rounded-2xl transition-all hover:opacity-90 active:scale-[0.98]"
               style={{
                 background: "linear-gradient(135deg, #F08856 0%, #F4B53D 100%)",
@@ -818,7 +923,7 @@ export default function HokkaidoTypingGame() {
                 letterSpacing: "0.3em",
               }}
             >
-              {selectedRegion === "all" ? "全179市町村" : `${selectedRegion}振興局`}
+              {getRegionLabel(gameMode)}
             </span>
           </div>
           <h1
@@ -832,7 +937,7 @@ export default function HokkaidoTypingGame() {
               color: "#3D2E26",
             }}
           >
-            よめるべや？
+            よめるべ！北海道！
           </h1>
           <div
             className="mt-2 h-px"
@@ -870,7 +975,7 @@ export default function HokkaidoTypingGame() {
                 color: "#3D2E26",
               }}
             >
-              {current.name}
+              {currentSplit.baseName}<span style={{ color: "#C0B5A0" }}>{currentSplit.suffix}</span>
             </div>
 
             <div className="mt-6">
@@ -885,7 +990,9 @@ export default function HokkaidoTypingGame() {
                   minHeight: "2.2em",
                 }}
               >
-                {input || (
+                {input ? (
+                  <>{input}<span style={{ color: "#C0B5A0" }}>{currentSplit.suffixReading}</span></>
+                ) : (
                   <span style={{ color: "#C0B5A0", fontWeight: 500 }}>ひらがなで答えてね</span>
                 )}
               </div>
@@ -904,7 +1011,7 @@ export default function HokkaidoTypingGame() {
                 autoCorrect="off"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="ひらがなで回答"
+                placeholder="市・町・村は入力不要"
                 lang="ja"
                 inputMode="text"
                 className="w-full px-4 py-3 rounded-xl outline-none"
